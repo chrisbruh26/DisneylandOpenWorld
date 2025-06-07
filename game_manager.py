@@ -113,6 +113,16 @@ class GameManager:
         # Player uses "enter <sub_area_name>" or "exit to <parent_area_name>"
         # Main Street <-> Emporium
         main_street_land.add_connection("enter emporium", emporium) # A conceptual "action" or a specific grid point exit
+        # Portal from Main Street (e.g., grid 2,0) to Emporium (e.g., its grid 3,0 - center of its bottom edge)
+        # Main Street grid: width=15, length=5. Emporium grid: width=6, length=4.
+        # Assuming (2,0) on Main Street is the "door" to Emporium.
+        # Player will appear at Emporium's (3,0) [width/2, 0].
+        main_street_land.add_portal(from_gx=2, from_gy=0, 
+                                    target_area=emporium, 
+                                    target_gx=emporium.grid_width // 2, target_gy=0)
+        # Portal from Emporium (e.g., grid 3,0) back to Main Street (at 2,0)
+        emporium.add_portal(from_gx=emporium.grid_width // 2, from_gy=0,
+                            target_area=main_street_land, target_gx=2, target_gy=0)
         emporium.add_connection("exit to main street", main_street_land)
 
         # Adventureland <-> Jungle Cruise Queue
@@ -126,6 +136,16 @@ class GameManager:
         # Adventureland <-> Hidden Alley (FenceShop)
         adventureland.add_connection("enter alley", hidden_alley)
         hidden_alley.add_connection("exit to adventureland", adventureland)
+        # Example portal for Hidden Alley if desired:
+        # adventureland.add_portal(from_gx=17, from_gy=1, target_area=hidden_alley, target_gx=hidden_alley.grid_width//2, target_gy=hidden_alley.grid_length-1) # Enter at top of alley
+        # hidden_alley.add_portal(from_gx=hidden_alley.grid_width//2, from_gy=hidden_alley.grid_length-1, target_area=adventureland, target_gx=17, target_gy=1)
+
+        # Example portal for Jungle Cruise Queue:
+        # Adventureland grid: width=20, length=15. Jungle Cruise Queue grid: width=3, length=8.
+        # If entrance on Adventureland is at (4,2) leading to JCQ's (1,7) (bottom-center of queue)
+        # adventureland.add_portal(from_gx=4, from_gy=2, target_area=jungle_cruise_queue, target_gx=jungle_cruise_queue.grid_width//2, target_gy=jungle_cruise_queue.grid_length-1)
+        # jungle_cruise_queue.add_portal(from_gx=jungle_cruise_queue.grid_width//2, from_gy=jungle_cruise_queue.grid_length-1, target_area=adventureland, target_gx=4, target_gy=2)
+
 
         # Place some items in the world
         map_instance = self.item_manager.create_instance("Lost Map")
@@ -170,10 +190,19 @@ class GameManager:
         # Allow moving into sub-areas by name (simple version)
         elif action == "enter" and args:
             target_sub_area_name = " ".join(args)
-            if self.player.current_area and target_sub_area_name.lower() in self.player.current_area.connections:
-                self.player.move(target_sub_area_name.lower()) # Use the connection key
+            # Try to match a connection key like "enter <target_sub_area_name>"
+            potential_connection_key = f"enter {target_sub_area_name.lower()}"
+            if self.player.current_area and potential_connection_key in self.player.current_area.connections:
+                self.player.move(potential_connection_key)
             else:
                 print(f"You can't seem to enter '{target_sub_area_name}' from here.")
+        # Allow exiting sub-areas by name (e.g. "exit to main street")
+        elif action == "exit" and args:
+            full_exit_command = " ".join(parts).lower() # e.g. "exit to main street"
+            if self.player.current_area and full_exit_command in self.player.current_area.connections:
+                self.player.move(full_exit_command)
+            else:
+                print(f"You can't seem to exit via '{' '.join(args)}' from here. Try 'look' for exit descriptions or walk to an exit portal.")
         elif action == "look" or action == "l":
             self.player.look_around()
         elif action == "inventory" or action == "i" or action == "bag":
@@ -225,13 +254,25 @@ class GameManager:
                 except ValueError: area_name_parts = args # Not numbers
             else: area_name_parts = args
 
-            target_area_name = " ".join(area_name_parts)
-            target_area = self.area_manager.get_area(target_area_name)
-            
-            if not target_area:
-                print(f"Sorry, can't find a place called '{target_area_name}'.")
+            target_area_name_query = " ".join(area_name_parts)
+            if not target_area_name_query: # If only numbers were given, or no name part
+                print("You need to specify an area name to teleport to.")
                 return
-            self.player.teleport(target_area, tp_x, tp_y)
+
+            matched_areas = self.area_manager.find_areas_by_partial_name(target_area_name_query)
+            
+            if not matched_areas:
+                print(f"Sorry, can't find any place matching '{target_area_name_query}'.")
+                return
+            elif len(matched_areas) == 1:
+                target_area = matched_areas[0]
+                self.player.teleport(target_area, tp_x, tp_y)
+            else: # Multiple matches
+                print(f"Found multiple places matching '{target_area_name_query}'. Please be more specific:")
+                for area in matched_areas:
+                    print(f"  - {area.name}")
+                # Player needs to issue a new, more specific command.
+                return
         elif action == "whereami":
              if self.player.current_area:
                 gx, gy = self.player.get_grid_position()
@@ -256,13 +297,13 @@ class GameManager:
                 print(f"Locations matching '{' '.join(args)}':")
                 for loc in found_locations:
                     print(f"  - {loc.name}: Starts around global coordinates {loc.area_origin_coords}.")
-            self.running = False
         else:
             print(f"Command not understood. Try 'help' for commands.")
 
     def update_world(self):
         self.game_turn += 1
-        npc_action_messages = self.npc_manager.update_all_npcs(self.game_turn)
+        # Pass the player to the NPC manager so it can filter messages based on proximity
+        npc_action_messages = self.npc_manager.update_all_npcs(self.game_turn, self.player)
         self.player.update_suspicion_decay() # Player's suspicion passively decays
         for msg in npc_action_messages:
             print(msg) # Print messages from NPC actions
@@ -283,7 +324,8 @@ class GameManager:
                 if command_input.lower() == 'help':
                     print("\nAvailable commands:")
                     print("  n, s, e, w (or north, south, east, west) - Move")
-                    print("  enter <place_name> - Enter a shop or ride queue from a Land")
+                    print("  enter <place_name> - Use a named entrance (e.g., 'enter emporium')")
+                    print("  exit to <place_name> - Use a named exit (e.g., 'exit to main street')")
                     print("  look (l)          - Look around the area")
                     print("  inventory (i, bag)- Check your bag and money")
                     print("  get <item_name>   - Pick up an item")

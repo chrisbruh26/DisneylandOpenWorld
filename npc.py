@@ -50,19 +50,29 @@ class NPC:
             return True, f"{self.name} moves."
         return False, None
 
-    def update(self, game_turn):
-        """Called each game turn for NPC actions. Very simple autonomy for now."""
+    def update(self, game_turn, player=None):
+        """
+        Called each game turn for NPC actions. Very simple autonomy for now.
+        If player is provided, only generate messages if NPC is close to player.
+        """
         action_message = None
         if self.action_cooldown > 0:
             self.action_cooldown -= 1
             return None # No message if on cooldown
 
+        # Only move within the current area, don't jump between areas
         if self.location and random.random() < 0.3: # 30% chance to try to move
             dx, dy = random.choice([(0,1), (0,-1), (1,0), (-1,0), (0,0)])
             if dx != 0 or dy != 0: # Don't report standing still as an action
                 moved, msg_part = self.move_on_grid(dx, dy)
                 if moved:
-                    action_message = msg_part # e.g., "Mickey Mouse moves."
+                    # Only generate a message if the player is in the same area and close enough
+                    if player and player.current_area == self.location:
+                        # Calculate distance to player
+                        player_distance = self.coordinates.distance_to(player.coordinates)
+                        # Only show messages for NPCs within a reasonable distance (e.g., 10 units)
+                        if player_distance <= 10:
+                            action_message = msg_part # e.g., "Mickey Mouse moves."
             self.action_cooldown = random.randint(2, 5) # Wait a bit before next action
         
         return action_message
@@ -75,12 +85,19 @@ class ParkCharacter(NPC):
         self.id = f"char_{name.lower().replace(' ', '_').replace('.', '')}_{random.randint(1000,9999)}"
         self.signature_move = signature_move
 
-    def update(self, game_turn):
+    def update(self, game_turn, player=None):
         """Characters might have simpler or more scripted behaviors."""
-        action_message = super().update(game_turn) # Basic movement
+        action_message = super().update(game_turn, player) # Basic movement
         if not action_message and self.action_cooldown == 0 and random.random() < 0.2:
-            action_message = f"{self.name} {self.signature_move}."
-            self.action_cooldown = random.randint(3, 6)
+            # Only show signature move if player is in the same area and close enough
+            if player and player.current_area == self.location:
+                player_distance = self.coordinates.distance_to(player.coordinates)
+                if player_distance <= 10:
+                    action_message = f"{self.name} {self.signature_move}."
+                    self.action_cooldown = random.randint(3, 6)
+            else:
+                # Still set cooldown even if we don't show the message
+                self.action_cooldown = random.randint(3, 6)
         return action_message
 
 
@@ -94,10 +111,10 @@ class Guest(NPC):
         self.suspicion_level = 0
         self.has_been_checked = False # Flag for distraction mechanic
 
-    def update(self, game_turn):
+    def update(self, game_turn, player=None):
         """Guests primarily wander, maybe react to nearby events later."""
         # For now, they behave like standard NPCs
-        return super().update(game_turn)
+        return super().update(game_turn, player)
 
 
 class CastMember(NPC):
@@ -108,10 +125,10 @@ class CastMember(NPC):
         self.role = role # e.g., "Security", "Cashier", "Greeter"
         self.alertness = random.uniform(0.5, 1.0) # How observant they are
 
-    def update(self, game_turn):
+    def update(self, game_turn, player=None):
         """Cast members might patrol or stay at posts. For now, standard NPC movement."""
         # Later, their update can include scanning for suspicious activity.
-        return super().update(game_turn)
+        return super().update(game_turn, player)
 
 class ShadyCharacter(NPC):
     """Represents a character who deals in illicit goods."""
@@ -120,10 +137,16 @@ class ShadyCharacter(NPC):
         self.id = f"shady_{name.lower().replace(' ', '_').replace('.', '')}_{random.randint(1000,9999)}"
         self.greeting = greeting
 
-    def update(self, game_turn):
+    def update(self, game_turn, player=None):
         """Shady characters mostly stay put, maybe offer a hint if player is nearby."""
-        # For now, no special update logic beyond base NPC.
-        return None # They don't wander like other NPCs unless explicitly told to.
+        # Only generate a message if the player is in the same area and close enough
+        if player and player.current_area == self.location:
+            player_distance = self.coordinates.distance_to(player.coordinates)
+            if player_distance <= 5 and random.random() < 0.2:  # Closer proximity threshold and occasional hint
+                return f"{self.name} whispers: '{self.greeting}'"
+        
+        # They don't wander like other NPCs unless explicitly told to
+        return None
 
 class NPCManager:
     def __init__(self):
@@ -138,10 +161,14 @@ class NPCManager:
             if npc.name.lower() == npc_id_or_name.lower(): return npc
         return None
 
-    def update_all_npcs(self, game_turn):
+    def update_all_npcs(self, game_turn, player=None):
+        """
+        Update all NPCs and collect their action messages.
+        If player is provided, only show messages for NPCs close to the player.
+        """
         messages = []
         for npc_id, npc_obj in self.npcs.items():
-            message = npc_obj.update(game_turn)
+            message = npc_obj.update(game_turn, player)
             if message:
                 messages.append(message)
         return messages

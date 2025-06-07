@@ -18,6 +18,8 @@ class Player:
 
     def set_current_area(self, area, grid_x=None, grid_y=None):
         """Set the current area for the player and position them on its grid."""
+        old_area_being_left = self.current_area # Store the area player is LEAVING
+
         self.current_area = area
         if area:
             if grid_x is None: grid_x = area.grid_width // 2
@@ -29,15 +31,17 @@ class Player:
             self.coordinates = area.get_global_coordinates(grid_x, grid_y)
             
             # Check for theft when leaving a shop
-            if self.current_area and hasattr(self.current_area, 'is_shop') and self.current_area.is_shop:
-                if area != self.current_area and (not area.parent_area or area.parent_area != self.current_area):
-                    # Player is leaving the shop area
-                    self.check_for_theft(self.current_area)
+            # This check is for when player leaves 'old_area_being_left' if it was a shop,
+            # and isn't just moving to its parent area (which is a normal exit).
+            if old_area_being_left and hasattr(old_area_being_left, 'is_shop') and old_area_being_left.is_shop:
+                if area != old_area_being_left and area != old_area_being_left.parent_area:
+                    self.check_for_theft(old_area_being_left)
 
             print(f"You are now in {area.name}. {area.description}") # Message after potential theft check
             self.look_around()
         else:
             print("Error: Tried to move to a null area.")
+            self.current_area = old_area_being_left # Revert if new area is null
 
     def get_grid_position(self):
         """Get the player's position relative to the current area's grid."""
@@ -98,12 +102,21 @@ class Player:
                 item_gx, item_gy = self.current_area.get_relative_coordinates(item.coordinates)[:2]
                 print(f"  - {item.name} at ({int(item_gx)}, {int(item_gy)})")
 
-        other_npcs_in_current_area = [npc for npc in self.current_area.npcs if npc not in npcs_here]
-        if other_npcs_in_current_area:
-            print("Other people in this spot:")
-            for npc in other_npcs_in_current_area:
+        # Only show NPCs that are close enough to be visible (within 10 units)
+        visible_npcs_in_current_area = []
+        for npc in self.current_area.npcs:
+            if npc not in npcs_here:
+                # Calculate distance to player
+                npc_distance = npc.coordinates.distance_to(self.coordinates)
+                if npc_distance <= 10:  # Only include NPCs within visible range
+                    visible_npcs_in_current_area.append((npc, npc_distance))
+        
+        if visible_npcs_in_current_area:
+            print("Other people you can see:")
+            # Sort by distance, closest first
+            for npc, distance in sorted(visible_npcs_in_current_area, key=lambda x: x[1]):
                 npc_gx, npc_gy = self.current_area.get_relative_coordinates(npc.coordinates)[:2]
-                print(f"  - {npc.name} at ({int(npc_gx)}, {int(npc_gy)})")
+                print(f"  - {npc.name} at ({int(npc_gx)}, {int(npc_gy)}) - {distance:.1f} units away")
 
         # Show sub-areas if the current area is a Land (or a container)
         if self.current_area.sub_areas:
@@ -151,10 +164,29 @@ class Player:
         if self.current_area.is_valid_grid_position(new_grid_x, new_grid_y):
             self.coordinates = self.current_area.get_global_coordinates(new_grid_x, new_grid_y)
             print(f"You move {direction}.")
-            # Optionally, describe what's new at the location after moving.
-            # self.look_around() # Could be too verbose for every step.
+
+            # Check for portals at the new location
+            current_gx, current_gy = self.get_grid_position()
+            if (current_gx, current_gy) in self.current_area.portals:
+                portal_info = self.current_area.portals[(current_gx, current_gy)]
+                target_area = portal_info['target_area']
+                target_gx = portal_info.get('target_gx')
+                target_gy = portal_info.get('target_gy')
+                
+                if target_area == self.current_area.parent_area:
+                     print(f"You find an exit from {self.current_area.name} and step back into {target_area.name}.")
+                else:
+                     print(f"You step through an opening into {target_area.name}...")
+                self.set_current_area(target_area, target_gx, target_gy)
+                return # Movement and transition complete
+            # No portal, just regular move.
+
         elif direction in self.current_area.connections: # Edge of grid, try connection
-             self.set_current_area(self.current_area.connections[direction])
+            target_area = self.current_area.connections[direction]
+            print(f"You head {direction} and arrive in {target_area.name}.")
+            # Enter new area at its default position (usually center)
+            self.set_current_area(target_area) 
+            return
         else:
             print("You can't go that way. Perhaps a wall or the edge of the park?")
 
